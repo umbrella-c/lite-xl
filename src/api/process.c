@@ -12,6 +12,12 @@
   // https://stackoverflow.com/questions/60645/overlapped-i-o-on-anonymous-pipe
   // https://docs.microsoft.com/en-us/windows/win32/procthread/creating-a-child-process-with-redirected-input-and-output
   #include <windows.h>
+#elif defined(VALI)
+  #include <errno.h>
+  #include <os/process.h>
+  #include <io.h>
+  #include <ioctl.h>
+  #include <signal.h>
 #else
   #include <errno.h>
   #include <unistd.h>
@@ -214,6 +220,15 @@ static bool process_handle_is_running(process_handle_t handle, int *status) {
       *status = s;
     return false;
   }
+#elif defined(VALI)
+  OsStatus_t osStatus;
+  int        exitCode;
+  osStatus = ProcessJoin(proc->pid, 1, &exitCode);
+  if (osStatus == OsSuccess) {
+    if (status != NULL)
+      *status = exitCode;
+    return false
+  }
 #else
   int s;
   if (waitpid(handle, &s, WNOHANG) != 0) {
@@ -232,6 +247,12 @@ static bool process_handle_signal(process_handle_t handle, signal_e sig) {
     case SIGNAL_TERM: return GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, GetProcessId(handle));
     case SIGNAL_KILL: return TerminateProcess(handle, -1);
     case SIGNAL_INTERRUPT: return DebugBreakProcess(handle);
+  }
+#elif defined(VALI)
+  switch(sig) {
+    case SIGNAL_TERM: terminate = ProcessSignal(proc->pid, SIGTERM); break;
+    case SIGNAL_KILL: terminate = ProcessSignal(proc->pid, SIGKILL); break;
+    case SIGNAL_INTERRUPT: terminate = ProcessSignal(proc->pid, SIGINT); break;
   }
 #else
   switch (sig) {
@@ -751,6 +772,52 @@ static int process_start(lua_State* L) {
     if (detach)
       CloseHandle(self->process_information.hProcess);
     CloseHandle(self->process_information.hThread);
+  #elif defined(VALI)
+    ProcessConfiguration_t processConfig;
+    OsStatus_t             osStatus;
+    int                    one = 1;
+    ProcessConfigurationInitialize(&processConfig);
+    processConfig.InheritFlags = PROCESS_INHERIT_STDOUT | PROCESS_INHERIT_STDIN | PROCESS_INHERIT_STDERR;
+    
+    // Make only the parents fd's non-blocking. Children should block.
+    for (int i = 0; i < 3; ++i) {
+      self->child_pipes[i][0] = pipe(4096, 0);
+      if (self->child_pipes[i][0] < 0) {
+        retval = luaL_error(L, "Error creating pipes: %s", strerror(errno));
+        goto cleanup;
+      }
+      ioctl(self->child_pipes[i][0], FIONBIO, &one);
+      self->child_pipes[i][1] = self->child_pipes[i][0];
+    }
+    processConfig.StdOutHandle = self->child_pipes[STDOUT_FD][0];
+    processConfig.StdInHandle = self->child_pipes[STDIN_FD][0];
+    processConfig.StdErrHandle = self->child_pipes[STDERR_FD][0];
+
+    char commandLine[32767] = { 0 }, environmentBlock[32767];
+    int offset = 0;
+    for (size_t i = 1; i < cmd_len; ++i) {
+      size_t len = strlen(cmd[i]);
+      offset += len + 1;
+      if (offset >= sizeof(commandLine))
+        break;
+      strcat(commandLine, " ");
+      strcat(commandLine, cmd[i]);
+    }
+    offset = 0;
+    for (size_t i = 0; i < env_len; ++i) {
+      if (offset + strlen(env_values[i]) + strlen(env_names[i]) + 1 >= sizeof(environmentBlock))
+        break;
+      offset += snprintf(&environmentBlock[offset], sizeof(environmentBlock) - offset, "%s=%s", env_names[i], env_values[i]);
+      environmentBlock[offset++] = 0;
+    }
+    environmentBlock[offset++] = 0;
+
+    osStatus = ProcessSpawnEx(cmd[0], commandLine, &processConfig, (UUId_t*)&self->pid);
+    if (osStatus != OsSuccess) {
+      retval = luaL_error(L, "Error spawning process: %i", osStatus);
+      goto cleanup;
+    }
+
   #else
     int control_pipe[2] = { 0 };
     for (int i = 0; i < 3; ++i) { // Make only the parents fd's non-blocking. Children should block.

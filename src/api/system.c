@@ -27,6 +27,10 @@
   #if !defined(S_ISDIR) && defined(S_IFMT) && defined(S_IFDIR)
     #define S_ISDIR(m) (((m) & S_IFMT) == S_IFDIR)
   #endif
+#elif defined(VALI)
+  #include <os/mollenos.h>
+  #include <os/process.h>
+  #include <io.h>
 #else
 
 #include <dirent.h>
@@ -34,6 +38,9 @@
 
 #ifdef __linux__
   #include <sys/vfs.h>
+  #include <dirent.h>
+  #include <unistd.h>
+  #include <sys/stat.h>
 #endif
 #endif
 
@@ -595,13 +602,17 @@ static int f_chdir(lua_State *L) {
   if (wpath == NULL) { return luaL_error(L, UTFCONV_ERROR_INVALID_CONVERSION ); }
   int err = _wchdir(wpath);
   free(wpath);
+#ifdef VALI
+  OsStatus_t osStatus = SetWorkingDirectory(path);
+  if (osStatus != OsSuccess) {
+    luaL_error(L, "chdir() failed");
+  }
 #else
   int err = chdir(path);
 #endif
   if (err) { luaL_error(L, "chdir() failed: %s", strerror(errno)); }
   return 0;
 }
-
 
 static int f_list_dir(lua_State *L) {
   const char *path = luaL_checkstring(L, 1);
@@ -656,6 +667,27 @@ static int f_list_dir(lua_State *L) {
 
   FindClose(find_handle);
   return 1;
+#elif defined(VALI)
+  struct DIR *dir;
+  int         status;
+
+  status = opendir(path, 0, &dir);
+  if (status) {
+    lua_pushnil(L);
+    lua_pushstring(L, strerror(errno));
+    return 2;
+  }
+
+  lua_newtable(L);
+  int i = 1;
+  struct DIRENT entry;
+  while (readdir(dir, &entry) == 0) {
+    if (strcmp(entry.d_name, "." ) == 0) { continue; }
+    if (strcmp(entry.d_name, "..") == 0) { continue; }
+    lua_pushstring(L, entry.d_name);
+    lua_rawseti(L, -2, i);
+    i++;
+  }
 #else
   DIR *dir = opendir(path);
   if (!dir) {
@@ -674,6 +706,7 @@ static int f_list_dir(lua_State *L) {
     lua_rawseti(L, -2, i);
     i++;
   }
+  #endif
 
   closedir(dir);
   return 1;
@@ -697,12 +730,15 @@ static int f_absolute_path(lua_State *L) {
 
   char *res = utfconv_wctoutf8(wfullpath);
   free(wfullpath);
+#elif defined(VALI)
+  return 0;
 #else
   char *res = realpath(path, NULL);
 #endif
   if (!res) { return 0; }
   lua_pushstring(L, res);
   free(res);
+#endif
   return 1;
 }
 
@@ -720,6 +756,30 @@ static int f_get_file_info(lua_State *L) {
   }
   int err = _wstat(wpath, &s);
   free(wpath);
+#elif defined(VALI)
+  OsFileDescriptor_t s;
+  int err = GetFileInformationFromPath(path, &s);
+  if (err < 0) {
+    lua_pushnil(L);
+    lua_pushstring(L, strerror(errno));
+    return 2;
+  }
+
+  lua_newtable(L);
+  lua_pushinteger(L, s.ModifiedAt.tv_sec);
+  lua_setfield(L, -2, "modified");
+
+  lua_pushinteger(L, s.Size.QuadPart);
+  lua_setfield(L, -2, "size");
+
+  if (s.Flags & FILE_FLAG_DIRECTORY) {
+    lua_pushstring(L, "dir");
+  } else {
+    lua_pushstring(L, "file");
+  }
+  lua_setfield(L, -2, "type");
+  lua_pushboolean(L, s.Flags & FILE_FLAG_LINK ? 1 : 0);
+  lua_setfield(L, -2, "symlink");
 #else
   struct stat s;
   int err = stat(path, &s);
@@ -745,7 +805,6 @@ static int f_get_file_info(lua_State *L) {
     lua_pushnil(L);
   }
   lua_setfield(L, -2, "type");
-
 #if __linux__
   if (S_ISDIR(s.st_mode)) {
     if (lstat(path, &s) == 0) {
@@ -753,6 +812,7 @@ static int f_get_file_info(lua_State *L) {
       lua_setfield(L, -2, "symlink");
     }
   }
+#endif
 #endif
   return 1;
 }
@@ -846,6 +906,8 @@ static int f_set_clipboard(lua_State *L) {
 static int f_get_process_id(lua_State *L) {
 #ifdef _WIN32
   lua_pushinteger(L, GetCurrentProcessId());
+#elif defined(VALI)
+  lua_pushinteger(L, ProcessGetCurrentId());
 #else
   lua_pushinteger(L, getpid());
 #endif

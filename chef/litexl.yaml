@@ -1,0 +1,73 @@
+project: 
+  summary: A lightweight text editor written in Lua, adapted from lite.
+  description: |
+    Lite XL is derived from lite. It is a lightweight text editor written mostly in Lua — it aims to provide
+    something practical, pretty, *small* and fast easy to modify and extend, or to use without doing either.
+
+    The aim of Lite XL compared to lite is to be more user friendly,
+    improve the quality of font rendering, and reduce CPU usage.
+  author: https://lite-xl.com/?/about/contributors
+  email: https://discord.com/invite/RWzqC3nx7K
+  version: 2.0.5
+  license: MIT
+  homepage: https://lite-xl.com/
+
+ingredients:
+- name: vali/clang-cc
+  platform: host
+  arch: host
+  channel: devel
+- name: vali/sdk-c
+  channel: devel
+- name: vali/sdk-cpp
+  channel: devel
+- name: vali/libgracht
+  channel: devel
+- name: vali/libfreetype
+  channel: devel
+- name: vali/libfreetype
+  channel: devel
+- name: vali/mesa
+  channel: devel
+- name: vali/liblua
+  channel: devel
+- name: vali/zlib
+  channel: devel
+- name: vali/libpng
+  channel: devel
+- name: vali/libasgaard
+  channel: devel
+- name: vali/libsdl
+  channel: devel
+
+recipes:
+  - name: doom
+    path: /
+    toolchain: vali/clang-cc
+    steps:
+    - name: config
+      type: generate
+      system: cmake
+      arguments:
+        - -G
+        - '"Unix Makefiles"'
+        - -DCMAKE_TOOLCHAIN_FILE=${{ PROJECT_PATH }}/chef/Vali.cmake
+      env:
+        CROSS: ${{ TOOLCHAIN_PREFIX }}/usr/local
+        VALI_ARCH: ${{ CHEF_TARGET_ARCHITECTURE }}
+        VALI_SDK_PATH: ${{ INGREDIENTS_PREFIX }}
+    - name: build
+      type: build
+      depends: [config]
+      system: make
+      env:
+        VALI_SDK_PATH: ${{ INGREDIENTS_PREFIX }}
+
+packs:
+- name: sdldoom
+  type: application
+  commands:
+  - name: doom
+    path: bin/doom.run
+    type: executable
+    description: The doom executable, run this to play

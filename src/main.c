@@ -9,6 +9,8 @@
 
 #ifdef _WIN32
   #include <windows.h>
+#elif defined(VALI)
+  #include <signal.h>
 #elif defined(__linux__) || defined(__serenity__)
   #include <unistd.h>
 #elif defined(__APPLE__)
